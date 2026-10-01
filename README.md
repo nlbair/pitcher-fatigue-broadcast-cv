@@ -1,79 +1,46 @@
-# Pitcher Fatigue Detection via Broadcast Video Pose Estimation
+# Pitcher Mechanical Fatigue Detection from Broadcast Video — Case Study
 
-This repository contains the code, derived data, and figures supporting research on detecting mechanical pitching fatigue from broadcast video using computer vision, submitted to the MIT Sloan Sports Analytics Conference (SSAC27) Research Paper Competition.
+This repository contains the code supporting the Jacob Misiorowski single-game case study portion of ongoing research into detecting in-game pitcher fatigue from broadcast video using markerless pose estimation.
 
-## Overview
+## Scope
 
-We use markerless pose estimation (YOLOv8-pose) on publicly available MLB broadcast video (Baseball Savant pitch clips) to extract pitching mechanics — primarily stride knee flexion — on a pitch-by-pitch basis, with no additional hardware or in-venue tracking required.
-
-The research tests two things:
-
-1. **Replication** — whether a within-outing mechanical fatigue signal (declining stride knee flexion as pitch count rises within a start), originally found in a 100-start random sample and a single-game case study (Jacob Misiorowski, 5/1/2026), holds up on an independent sample of pitchers.
-2. **Injury proximity** — whether this fatigue signal shows any detectable elevation in the starts immediately preceding a real, documented pitcher injury, using five pitchers with media-reported 2023–2026 injuries and a healthy 2026 control (Paul Skenes).
+This notebook (`fullsaberseminarscript.ipynb`) covers **one real start in full detail**: Jacob Misiorowski (MLBAM ID 694819), May 1, 2026, vs. the Washington Nationals (game_pk 822744). It does not include the separate 100-start population-level study (62 unique pitchers, mixed-effects model, camera-shake negative control) referenced in the accompanying abstract; that analysis was conducted separately.
 
 ## Data Sources
 
-- **MLB Stats API** (`statsapi.mlb.com`) — game logs, pitch-by-pitch play data, play IDs
-- **Baseball Savant** (`baseballsavant.mlb.com`) — pitch clip video resolution and download
-- **Publicly reported injury/IL transaction data** — team and league injury announcements (dates and descriptions compiled from public reporting)
+- **MLB Stats API** (`statsapi.mlb.com`) — live game feed, pitch-by-pitch play data, play IDs
+- **Baseball Savant** (`baseballsavant.mlb.com`) — pitch clip video resolution and download via the `sporty-videos` page wrapper
 
-Raw broadcast video is not included in this repository due to copyright (owned by MLB/broadcast rightsholders). All video is publicly accessible via the cited sources above using the play IDs embedded in the derived data files, allowing full reproduction of the pipeline from scratch.
+Raw broadcast video is not included due to copyright (owned by MLB/broadcast rightsholders). It is fully re-derivable from the play IDs in this notebook via the public sources above.
 
-## Repository Structure
+## What's in the Notebook
 
-```
-code/
-  fullsaberseminarscript.ipynb          Original 100-start study + single-game
-                                         (Misiorowski) case study pipeline
-  skenes_season_pipeline.py             Production pipeline: full 2026 season,
-                                         Paul Skenes (healthy control)
-  multi_pitcher_pipeline.py             Production pipeline: full-season pulls for
-                                         5 pitchers with documented injuries
-                                         (run in parallel across 3 processes,
-                                         split by pitcher workload)
-  mega_sanity_check_injury_analysis.py  Data integrity checks, within-start /
-                                         season-long / carryover fatigue tests,
-                                         and the 12-event injury-proximity
-                                         analysis (incl. false-positive check)
-  quick_mean_flexion_check.py           Pooled within-start mean knee flexion
-                                         slope test across all 6 pitchers,
-                                         directly comparable to the original
-                                         100-start study's headline metric
+**1. Data acquisition**
+Pulls every pitch Misiorowski threw in the target game via the MLB Stats API live feed, resolves each pitch's Baseball Savant clip URL, and downloads the clip.
 
-data/
-  skenes_2026_progress.csv              Per-pitch processing log, Skenes 2026
-                                         (detection quality, timing, frame counts)
-  skenes_2026_metrics_summary.csv       Per-pitch release-band biomechanical
-                                         metrics, Skenes 2026
-  pooled_within_start_slopes.csv        Individual within-start knee flexion
-                                         slopes, all 6 pitchers (141 starts)
-  injury_proximity_summary.csv          Per-event summary: last start before each
-                                         of 12 documented injuries, z-scores,
-                                         trailing-window significance tests
+**2. Pose estimation pipeline**
+- YOLOv8-pose (Ultralytics) tracking, with a pitcher/hitter/catcher (PHC) gated coverage check to confirm the camera angle shows all three roles before trusting a clip
+- Release-frame detection via a wrist-height heuristic, confirmed by one-time manual visual validation against a rendered frame strip
+- A fixed, validated release window (frames 175–183) and tracking window (165–195) used once the release point was confirmed for this specific broadcast
 
-figures/
-  saberseminarvisual1.png               Case study: velocity vs. stride knee
-                                         flexion across a single outing
-  saberseminarvisual2.png               Within-outing mechanical breakdown:
-                                         average angle and release-point
-                                         instability vs. pitch number
-```
+**3. Biomechanical metrics (computed per frame)**
+- Knee flexion (both legs), elbow flexion (both arms)
+- Shoulder abduction proxy (upper arm angle from vertical)
+- Trunk forward tilt and lateral lean
+- Hip-shoulder separation (X-factor proxy), torso/pelvis rotation proxies
+- Wrist height and position at release
+- Semantic stride-leg / throwing-arm aliases applied based on pitcher handedness
 
-## Methodology Summary
+**4. Statistical analysis**
+- IQR-based outlier filtering (k=2.5) per pitch type
+- Inning-level aggregation and linear regression (slope, r², p) of each metric against pitch count/inning
+- Bootstrap confidence intervals on regression slopes
+- ANCOVA-style comparison isolating a post-settling period from the full outing
+- Linear vs. quadratic model comparison
+- **Robustness checks:** a leverage test (does dropping the noisiest inning change the headline result?) and a multiple-comparisons correction (Benjamini-Hochberg FDR and Bonferroni) applied across all 45 regressions run (24 mean-metrics + 21 std-metrics)
 
-**Pose estimation pipeline:** YOLOv8-pose (Ultralytics), batched inference, run on a fixed frame window per pitch clip anchored to a validated ball-release frame. Pitcher identity across frames is resolved via IoU-based tracking against the prior frame's bounding box, with a mound-relative position heuristic as fallback. Stride knee flexion (hip-knee-ankle angle) and elbow flexion (shoulder-elbow-wrist angle) are computed at each frame in a release-band window and aggregated per pitch.
-
-**Cleaning:** IQR-based outlier filtering (k=2.5) on knee flexion mean and standard deviation, plus a minimum release-band detection threshold, consistent across all pitchers studied.
-
-**Statistical tests:**
-- *Within-outing trend:* per-start linear regression of knee flexion (mean and SD) against pitch number within that start; slopes pooled and tested against zero.
-- *Season-long trend:* start-level regression across a full season.
-- *Carryover:* whether end-of-start instability predicts the next start's opening instability.
-- *Injury proximity:* z-scored comparison of the 2–3 starts preceding each documented injury against that pitcher's own season baseline, with a random-window false-positive rate check to guard against large-sample-size significance artifacts.
-
-## Known Limitations
-
-The release-frame/window calibration was established via one-time visual confirmation on a single reference broadcast and reused across all broadcasts analyzed. Camera geometry, timing offset, and video quality vary across different games and stadiums, and this confound is present at meaningful scale (28–61% of variance in knee flexion mean explained simply by which start/broadcast it was). Within-outing comparisons are largely immune to this confound since camera setup is constant within a single broadcast; between-start and season-long comparisons are more vulnerable to it.
+**5. Visualization development**
+Multiple iterative presentation formats built for the Saberseminar talk, including skeleton overlays on broadcast video, dual-panel velocity-vs-mechanics comparisons, HUD-style telemetry displays, motion-trail ("ghost trail") renders, a transition effect between visual styles ("mitosis"), slow-motion skeleton-only renders, and side-by-side pitch comparisons.
 
 ## Citation / Contact
 
